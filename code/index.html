@@ -2,18 +2,27 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Messenger</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Messenger</title>
     <style>
-        #messages { border: 1px solid #ccc; padding: 10px; height: 300px; overflow-y: scroll; }
-        #messageInput { width: 80%; }
+        #messages { border: 1px solid #ccc; height: 300px; overflow-y: scroll; margin-bottom: 10px; padding: 10px; }
+        #messageInput, #userName { width: 60%; margin-bottom: 10px; }
         button { margin-left: 10px; }
+        #nameForm { display: block; }
+        #chatForm { display: none; }
     </style>
 </head>
 <body>
-    <h1>Messenger</h1>
-    <div id="messages"></div>
-    <input type="text" id="messageInput" placeholder="Type a message...">
-    <button onclick="sendMessage()">Send</button>
+    <h1>WebSocket Messenger</h1>
+    <div id="nameForm">
+        <input type="text" id="userName" placeholder="Enter your name...">
+        <button onclick="setUserName()">Join Chat</button>
+    </div>
+    <div id="chatForm">
+        <div id="messages"></div>
+        <input type="text" id="messageInput" placeholder="Type a message...">
+        <button onclick="sendMessage()">Send</button>
+    </div>
     <script src="client.js"></script>
 </body>
 </html>

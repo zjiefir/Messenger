@@ -1,4 +1,4 @@
-#include <iostream>
+п»ї#include <iostream>
 #include <set>
 #include <memory>
 #include <string>
@@ -14,8 +14,10 @@ namespace http = beast::http;
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
-class session; // Предварительное объявление
+class session; 
 std::set<std::shared_ptr<session>> clients;
+
+
 
 class session : public std::enable_shared_from_this<session> {
     websocket::stream<tcp::socket> ws_;
@@ -29,23 +31,24 @@ public:
         ws_.set_option(websocket::stream_base::decorator(
             [](websocket::response_type& res) {
                 res.set(http::field::server, "Messenger-WebSocket-Server");
-                std::cout << "Sending WebSocket response headers..." << std::endl;
+                std::cout << "Sending WebSocket response headers: " << res << std::endl;
             }));
         ws_.set_option(websocket::stream_base::timeout{
-            std::chrono::seconds(5), // handshake timeout
-            std::chrono::seconds(30), // idle timeout
-            false // keep-alive pings
+            std::chrono::seconds(10), 
+            std::chrono::seconds(60), 
+            true 
             });
-        try {
-            ws_.accept();
-            std::cout << "Client connected via WebSocket!" << std::endl;
-            clients.insert(shared_from_this());
-            read();
-        }
-        catch (const beast::system_error& e) {
-            std::cerr << "Accept error: " << e.what() << " (code: " << e.code().value() << ")" << std::endl;
-            read_http_request();
-        }
+        ws_.async_accept([self = shared_from_this()](beast::error_code ec) {
+            if (!ec) {
+                std::cout << "Client connected via WebSocket!" << std::endl;
+                clients.insert(self);
+                self->read();
+            }
+            else {
+                std::cerr << "Async accept error: " << ec.message() << " (code: " << ec.value() << ")" << std::endl;
+                self->read_http_request();
+            }
+            });
     }
 private:
     void read_http_request() {
@@ -66,51 +69,81 @@ private:
         }
     }
     void read() {
-        std::cout << "Starting read..." << std::endl;
-        try {
-            // Пробуем синхронный read для теста
-            std::size_t bytes = ws_.read(buffer_);
-            std::cout << "Read completed, bytes: " << bytes << std::endl;
-            std::string msg = beast::buffers_to_string(buffer_.data());
-            std::cout << "Received message: " << msg << " (" << bytes << " bytes)" << std::endl;
-            buffer_.consume(buffer_.size());
-            broadcast(msg);
-            read(); // Продолжаем читать
-        }
-        catch (const beast::system_error& e) {
-            std::cerr << "Read error: " << e.what() << " (code: " << e.code().value() << ")" << std::endl;
-            clients.erase(shared_from_this());
-            ws_.close(websocket::close_code::normal);
-        }
+        std::cout << "Starting async_read..." << std::endl;
+        ws_.async_read(buffer_, [self = shared_from_this()](beast::error_code ec, std::size_t bytes) {
+            std::cout << "Async read callback invoked" << std::endl;
+            if (!ec) {
+                std::cout << "Read completed, bytes: " << bytes << std::endl;
+                std::string msg = beast::buffers_to_string(self->buffer_.data());
+                std::cout << "Received message: " << msg << " (" << bytes << " bytes)" << std::endl;
+                self->buffer_.consume(self->buffer_.size());
+                self->broadcast(msg);
+                self->read();
+            }
+            else {
+                std::cerr << "Read error: " << ec.message() << " (code: " << ec.value() << ")" << std::endl;
+                clients.erase(self);
+                self->ws_.async_close(websocket::close_code::normal, [](beast::error_code ec) {
+                    if (ec) {
+                        std::cerr << "Close error: " << ec.message() << " (code: " << ec.value() << ")" << std::endl;
+                    }
+                    });
+            }
+            });
     }
     void broadcast(const std::string& msg) {
         std::cout << "Broadcasting message: " << msg << " to " << clients.size() << " clients" << std::endl;
         for (const auto& client : clients) {
-            try {
-                client->ws_.write(net::buffer(msg));
-                std::cout << "Wrote " << msg.size() << " bytes to client" << std::endl;
-            }
-            catch (const beast::system_error& e) {
-                std::cerr << "Write error: " << e.what() << " (code: " << e.code().value() << ")" << std::endl;
-            }
+            auto msg_copy = std::make_shared<std::string>(msg);
+            client->ws_.async_write(
+                net::buffer(*msg_copy),
+                [msg_copy](beast::error_code ec, std::size_t bytes) {
+                    if (ec) {
+                        std::cerr << "Write error: " << ec.message() << " (code: " << ec.value() << ")" << std::endl;
+                    }
+                    else {
+                        std::cout << "Wrote " << bytes << " bytes for message: " << *msg_copy << std::endl;
+                    }
+                }
+            );
         }
+    }
+};
+
+class listener : public std::enable_shared_from_this<listener> {
+    net::io_context& ioc_;
+    tcp::acceptor acceptor_;
+public:
+    listener(net::io_context& ioc, tcp::endpoint endpoint) : ioc_(ioc), acceptor_(ioc, endpoint) {
+        std::cout << "Listener created for endpoint " << endpoint << std::endl;
+    }
+    void start() {
+        accept();
+    }
+private:
+    void accept() {
+        acceptor_.async_accept(ioc_, [self = shared_from_this()](beast::error_code ec, tcp::socket socket) {
+            if (!ec) {
+                std::cout << "New client accepted" << std::endl;
+                auto sess = std::make_shared<session>(std::move(socket));
+                sess->start();
+            }
+            else {
+                std::cerr << "Accept error: " << ec.message() << " (code: " << ec.value() << ")" << std::endl;
+            }
+            self->accept(); 
+            });
     }
 };
 
 void do_listen(net::io_context& ioc, tcp::endpoint endpoint) {
     std::cout << "Listening for connections on " << endpoint << "..." << std::endl;
-    tcp::acceptor acceptor{ ioc, endpoint };
-    while (true) {
-        tcp::socket socket{ ioc };
-        std::cout << "Waiting for new client..." << std::endl;
-        acceptor.accept(socket);
-        std::cout << "New client accepted" << std::endl;
-        auto sess = std::make_shared<session>(std::move(socket));
-        sess->start();
-    }
+    auto l = std::make_shared<listener>(ioc, endpoint);
+    l->start();
 }
 
 int main() {
+	setlocale(LC_ALL, "ru_RU.UTF-8");
     try {
         std::cout << "Server starting on port 8080..." << std::endl;
         net::io_context ioc{ 1 };
